@@ -1,0 +1,5 @@
+// Extensions VS Code offers to install when this folder is opened (the writer clicks "Install").
+// LaTeX Workshop: build buttons, PDF tab, click-to-jump.  LTeX+: spelling and grammar.
+{
+  "recommendations": ["james-yu.latex-workshop", "ltex-plus.vscode-ltex-plus"]
+}

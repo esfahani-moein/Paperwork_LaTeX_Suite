@@ -1,0 +1,43 @@
+#!/bin/sh
+# ---------------------------------------------------------------------------
+# bin/paper: host-side entry point (runs on macOS, nothing to install).
+# 1. Service control:  bin/paper up | down | rebuild | new <name>
+# 2. Tool shim: symlinks in bin/ (paperbuild, tex-fmt, chktex, texcount, latexdiff, tectonic)
+#    point here; the tool runs inside the always-on container, in the same folder,
+#    via docker exec. The container is started automatically if it is not running.
+# A paper's paper.env with TEXLIVE=2025 routes its builds to the frozen TeX Live 2025 container.
+# ---------------------------------------------------------------------------
+set -eu
+root=$(cd "$(dirname "$0")/.." && pwd -P)
+dc() { PAPER_ROOT=$root docker compose --project-directory "$root" --env-file "$root/paper.env" "$@"; }
+command -v docker >/dev/null 2>&1 || { echo "paper: docker not found. Start OrbStack first." >&2; exit 2; }
+
+tool=$(basename "$0")
+if [ "$tool" = paper ]; then
+  case "${1:-}" in
+    up)      dc up -d ;;
+    down)    dc down ;;
+    rebuild) dc build --pull && dc up -d --force-recreate ;;
+    new)     [ -n "${2:-}" ] && [ ! -e "$root/papers/$2" ] || { echo "usage: bin/paper new <name> (must not exist yet)" >&2; exit 2; }
+             mkdir -p "$root/papers" && cp -R "$root/templates/article" "$root/papers/$2" && echo "Created papers/$2" ;;
+    *)       echo "usage: bin/paper up|down|rebuild|new <name>" >&2; exit 2 ;;
+  esac
+  exit
+fi
+
+# Only the project folder is mounted, so the tool must run inside it.
+here=$(pwd -P)
+case "$here/" in "$root"/*) ;; *) echo "paper: run inside $root (only that folder is visible to the compiler)" >&2; exit 2 ;; esac
+
+# Paper folder = folder of the last existing file argument (else current folder); its paper.env may pin TEXLIVE.
+dir=$here; for a in "$@"; do [ -f "$a" ] && dir=$(cd "$(dirname "$a")" && pwd -P); done
+year=$(sed -n 's/^[[:space:]]*TEXLIVE[[:space:]]*=[[:space:]]*\([0-9]*\).*/\1/p' "$dir/paper.env" 2>/dev/null | tail -n1)
+name=paper-latex${year:+-tl$year}; svc=${year:+tl$year}
+
+# Fast path: one docker call. Only on failure check whether the container was simply not running.
+# shortcut: if the container was down, the retry gets an empty stdin (only matters for piped tex-fmt).
+docker exec -i -w "$here" "$name" "$tool" "$@" && exit 0 || rc=$?
+[ "$(docker container inspect -f '{{.State.Running}}' "$name" 2>/dev/null)" = true ] && exit $rc
+echo "paper: starting the compile container..." >&2
+dc up -d ${svc:-paper} >&2
+exec docker exec -i -w "$here" "$name" "$tool" "$@"

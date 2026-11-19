@@ -1,0 +1,27 @@
+// ---------------------------------------------------------------------------
+// Workspace settings: open THIS folder in VS Code; every paper in papers/ works in one window.
+// Builds run in the paper-latex container through bin/paperbuild (no TeX on the Mac).
+// Your own extensions (Claude, Codex, ...) keep working normally.
+// ---------------------------------------------------------------------------
+{
+  // Word-like: save 1 s after typing stops, which triggers a build.
+  "files.autoSave": "afterDelay",
+  "files.autoSaveDelay": 1000,
+  "latex-workshop.latex.autoBuild.run": "onSave",
+  "latex-workshop.latex.autoClean.run": "never",
+  "latex-workshop.view.pdf.viewer": "tab",
+
+  // Two buttons in the TeX sidebar. /bin/sh + %WORKSPACE_FOLDER% so the shim is found
+  // even when VS Code is started from the Dock (no shell PATH).
+  "latex-workshop.latex.tools": [
+    { "name": "fast", "command": "/bin/sh", "args": ["%WORKSPACE_FOLDER%/bin/paperbuild", "%DOC_EXT%"] },
+    { "name": "journal", "command": "/bin/sh", "args": ["%WORKSPACE_FOLDER%/bin/paperbuild", "--journal", "%DOC_EXT%"] }
+  ],
+  "latex-workshop.latex.recipes": [
+    { "name": "Fast build", "tools": ["fast"] },
+    { "name": "Journal build (clean, for submission)", "tools": ["journal"] }
+  ],
+
+  // Hide build leftovers from the file tree (they normally live in RAM anyway).
+  "files.exclude": { "**/*.synctex.gz": true }
+}

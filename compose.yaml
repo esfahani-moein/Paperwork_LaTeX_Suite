@@ -1,0 +1,53 @@
+# ---------------------------------------------------------------------------
+# compose.yaml: the single background compile service shared by ALL papers.
+# Do not run "docker compose" by hand; use bin/paper (it passes PAPER_ROOT and paper.env):
+#   bin/paper up        start / apply changed settings
+#   bin/paper down      stop
+#   bin/paper rebuild   rebuild image (new TeX Live packages, tool updates)
+# All ${VARS} come from paper.env.
+# ---------------------------------------------------------------------------
+services:
+  paper: &paper
+    image: paper-latex:latest
+    build:
+      context: image
+      args: { SCHEME: "${TEXLIVE_SCHEME:-scheme-full}" }
+    container_name: paper-latex
+    command: sleep infinity          # idle until bin/paper docker-execs a build into it
+    init: true
+    restart: unless-stopped          # comes back with OrbStack; writers never start it
+    read_only: true                  # hardened: only /cache, /build, /tmp and the project are writable
+    network_mode: "${NETWORK:-bridge}" # Tectonic downloads packages on demand; "none" = offline
+    cpus: "${CPUS:-4}"
+    mem_limit: "${MEMORY:-4g}"
+    environment:
+      PAPER_ROOT: "${PAPER_ROOT:?use bin/paper, not docker compose directly}"
+      PAPER_NETWORK: "${NETWORK:-bridge}"
+    tmpfs:
+      - /tmp
+      - "/build:size=${BUILD_RAM:-2g},mode=1777,exec"   # aux files live in RAM
+    volumes:
+      # Same absolute path inside and outside: SyncTeX click-to-jump and AI agents see identical paths.
+      # Only this project folder is visible to the container.
+      - "${PAPER_ROOT}:${PAPER_ROOT}"
+      - cache:/cache                 # precompiled preambles, font + Tectonic caches
+
+  # Frozen TeX Live 2025 for journals that require it. Used automatically when a paper's
+  # paper.env says TEXLIVE=2025 (first use builds it). Copy this block for other years.
+  tl2025:
+    <<: *paper
+    profiles: [tl2025]
+    image: paper-latex:tl2025
+    container_name: paper-latex-tl2025
+    build:
+      context: image
+      args:
+        SCHEME: "${TEXLIVE_SCHEME:-scheme-full}"
+        CTAN: https://ftp.math.utah.edu/pub/tex/historic/systems/texlive/2025/tlnet-final
+    volumes:
+      - "${PAPER_ROOT}:${PAPER_ROOT}"
+      - cache-tl2025:/cache          # separate: caches are not compatible across TeX Live years
+
+volumes:
+  cache:
+  cache-tl2025:

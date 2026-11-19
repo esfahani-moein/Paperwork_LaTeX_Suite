@@ -1,0 +1,69 @@
+#!/bin/sh
+# ---------------------------------------------------------------------------
+# paperbuild: runs INSIDE the container. Builds one LaTeX document fast.
+# Called by VS Code (LaTeX Workshop) and AI agents through bin/paperbuild on the host.
+#
+# Usage: paperbuild [--journal] [file.tex]
+#   no file    -> MAIN from the paper's paper.env, else main.tex
+#   --journal  -> clean full rebuild, no cached preamble (the PDF you submit)
+#
+# Engine choice, first match wins:
+#   1. <paper folder>/paper.env  ENGINE=...
+#   2. "% !TEX program = ..." line in the .tex file
+#   3. <project root>/paper.env  ENGINE=...
+#   4. auto: fontspec/unicode-math -> lualatex, otherwise pdflatex
+# Speed: aux files in RAM (/build), preamble precompiled once into /cache/fmt (pdflatex).
+# ---------------------------------------------------------------------------
+set -eu
+journal=0; [ "${1:-}" = --journal ] && { journal=1; shift; }
+
+# val FILE KEY: read KEY=VALUE from a settings file without executing it; "auto" counts as unset.
+val() { sed -n "s/^[[:space:]]*$2[[:space:]]*=[[:space:]]*\([^#[:space:]]*\).*/\1/p" "$1" 2>/dev/null | tail -n1 | grep -vx auto || true; }
+global=${PAPER_ROOT:-/nonexistent}/paper.env
+
+f=${1:-$(val paper.env MAIN)}; f=${f:-main.tex}
+tex=$(realpath "$f"); cd "$(dirname "$tex")"; f=$(basename "$tex")
+aux=/build/$(printf %s "$tex" | sha1sum | cut -c1-12)   # per-document RAM build dir
+lock="flock $aux.lock"                                  # one build per document at a time
+
+eng=$(val paper.env ENGINE)
+[ -n "$eng" ] || eng=$(sed -n 's/^%[[:space:]]*!TEX[[:space:]]*program[[:space:]]*=[[:space:]]*\([a-z]*\).*/\1/Ip' "$f" | head -n1 | tr A-Z a-z)
+[ -n "$eng" ] || eng=$(val "$global" ENGINE)
+[ -n "$eng" ] || { grep -qE '\\usepackage(\[[^]]*\])?\{[^}]*(fontspec|unicode-math)' "$f" && eng=lualatex || eng=pdflatex; }
+se=$(val paper.env SHELL_ESCAPE); se=${se:-$(val "$global" SHELL_ESCAPE)}
+
+# Tectonic: single pass handles reruns/bibtex itself; offline (-C, cached packages) unless network is on.
+if [ "$eng" = tectonic ]; then
+  set -- --synctex
+  [ "${PAPER_NETWORK:-bridge}" = none ] && set -- "$@" -C
+  [ "$se" = 1 ] && set -- "$@" -Z shell-escape
+  exec $lock tectonic "$@" "$f"
+fi
+
+case $eng in
+  pdflatex) mode=-pdf ;; lualatex) mode=-pdflua ;; xelatex) mode=-pdfxe ;;
+  *) echo "paperbuild: unknown ENGINE '$eng' (use auto|pdflatex|lualatex|xelatex|tectonic)" >&2; exit 2 ;;
+esac
+# -emulate-aux-dir: engine writes into the RAM dir; only PDF + synctex land next to the source.
+set -- $mode -auxdir="$aux" -emulate-aux-dir -interaction=nonstopmode -file-line-error -synctex=1
+[ "$se" = 1 ] && set -- "$@" -shell-escape
+
+if [ $journal = 1 ]; then
+  $lock rm -rf "$aux"; set -- "$@" -g
+elif [ $mode = -pdf ]; then
+  # Precompiled preamble, keyed by engine version + preamble text; dumped to a temp name then
+  # renamed so parallel builds never read a half-written format.
+  # shortcut: only the main file's preamble is hashed; edits to local .sty/.cls need a Journal build. pdflatex only.
+  fmt=p$( { pdftex --version | head -n1; sed '/\\begin{document}/q' "$f"; } | sha1sum | cut -c1-16)
+  if [ ! -f /cache/fmt/$fmt.fmt ]; then
+    mkdir -p /cache/fmt
+    pdflatex -ini -interaction=batchmode -jobname=tmp$$ -output-directory=/cache/fmt "&pdflatex" mylatexformat.ltx "$f" \
+      >/dev/null 2>&1 && mv /cache/fmt/tmp$$.fmt /cache/fmt/$fmt.fmt
+    rm -f /cache/fmt/tmp$$.*
+  fi
+  # by name via search path: an absolute -fmt path breaks pdflatex's output naming. No format -> plain build.
+  if [ -f /cache/fmt/$fmt.fmt ]; then
+    export TEXFORMATS=/cache/fmt:; set -- "$@" -pdflatex="pdflatex -fmt=$fmt %O %S"
+  fi
+fi
+exec $lock latexmk "$@" "$f"
