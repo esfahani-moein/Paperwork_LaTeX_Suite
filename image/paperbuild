@@ -1,7 +1,7 @@
 #!/bin/sh
 # ---------------------------------------------------------------------------
 # paperbuild: runs INSIDE the container. Builds one LaTeX document fast.
-# Called by VS Code (LaTeX Workshop) and AI agents through bin/paperbuild on the host.
+# Called by VS Code (LaTeX Workshop) and AI agents through bin/paper build on the host.
 #
 # Usage: paperbuild [--journal] [file.tex]
 #   no file    -> MAIN from the paper's paper.env, else main.tex
@@ -51,10 +51,10 @@ set -- $mode -auxdir="$aux" -emulate-aux-dir -interaction=nonstopmode -file-line
 if [ $journal = 1 ]; then
   $lock rm -rf "$aux"; set -- "$@" -g
 elif [ $mode = -pdf ]; then
-  # Precompiled preamble, keyed by engine version + preamble text; dumped to a temp name then
+  # Precompiled preamble, keyed by image/engine versions + preamble text; dumped to a temp name then
   # renamed so parallel builds never read a half-written format.
   # shortcut: only the main file's preamble is hashed; edits to local .sty/.cls need a Journal build. pdflatex only.
-  fmt=p$( { pdftex --version | head -n1; sed '/\\begin{document}/q' "$f"; } | sha1sum | cut -c1-16)
+  fmt=p$( { printf '%s\n' "${PAPER_TEXLIVE:-unknown}-${PAPER_IMAGE_ID:-dev}"; pdftex --version | head -n1; sed '/\\begin{document}/q' "$f"; } | sha1sum | cut -c1-16)
   if [ ! -f /cache/fmt/$fmt.fmt ]; then
     mkdir -p /cache/fmt
     pdflatex -ini -interaction=batchmode -jobname=tmp$$ -output-directory=/cache/fmt "&pdflatex" mylatexformat.ltx "$f" \

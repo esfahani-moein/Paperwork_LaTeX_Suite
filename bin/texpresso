@@ -1,0 +1,4 @@
+#!/bin/sh
+# Internal VS Code bridge: stream TeXpresso's protocol through the shared container.
+set -eu
+exec "$(dirname "$0")/paper" _texpresso "$@"

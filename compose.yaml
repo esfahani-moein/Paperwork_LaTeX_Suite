@@ -1,23 +1,23 @@
 # ---------------------------------------------------------------------------
-# compose.yaml: the single background compile service shared by ALL papers.
-# Do not run "docker compose" by hand; use bin/paper (it passes PAPER_ROOT and paper.env):
-#   bin/paper up        start / apply changed settings
-#   bin/paper down      stop
-#   bin/paper rebuild   rebuild image (new TeX Live packages, tool updates)
-# All ${VARS} come from paper.env.
+# One always-on compile service for every paper and optional preview tool.
+# Use bin/paper, not docker compose directly, so PAPER_ROOT is always set.
+# TEXLIVE and TEXLIVE_SCHEME are image settings; apply changes with bin/paper rebuild.
 # ---------------------------------------------------------------------------
 services:
-  paper: &paper
-    image: paper-latex:latest
+  paper:
+    image: paper-latex:${TEXLIVE:-latest}
     build:
       context: image
-      args: { SCHEME: "${TEXLIVE_SCHEME:-scheme-full}" }
+      args:
+        TEXLIVE: "${TEXLIVE:-latest}"
+        SCHEME: "${TEXLIVE_SCHEME:-scheme-full}"
+        BUILD_ID: "${BUILD_ID:-dev}"
     container_name: paper-latex
-    command: sleep infinity          # idle until bin/paper docker-execs a build into it
+    command: sleep infinity
     init: true
-    restart: unless-stopped          # comes back with OrbStack; writers never start it
-    read_only: true                  # hardened: only /cache, /build, /tmp and the project are writable
-    network_mode: "${NETWORK:-bridge}" # Tectonic downloads packages on demand; "none" = offline
+    restart: unless-stopped
+    read_only: true
+    network_mode: "${NETWORK:-bridge}"
     cpus: "${CPUS:-4}"
     mem_limit: "${MEMORY:-4g}"
     environment:
@@ -25,29 +25,11 @@ services:
       PAPER_NETWORK: "${NETWORK:-bridge}"
     tmpfs:
       - /tmp
-      - "/build:size=${BUILD_RAM:-2g},mode=1777,exec"   # aux files live in RAM
+      - "/build:size=${BUILD_RAM:-2g},mode=1777,exec"
     volumes:
-      # Same absolute path inside and outside: SyncTeX click-to-jump and AI agents see identical paths.
-      # Only this project folder is visible to the container.
+      # Identical paths on both sides keep SyncTeX and editor navigation working.
       - "${PAPER_ROOT}:${PAPER_ROOT}"
-      - cache:/cache                 # precompiled preambles, font + Tectonic caches
-
-  # Frozen TeX Live 2025 for journals that require it. Used automatically when a paper's
-  # paper.env says TEXLIVE=2025 (first use builds it). Copy this block for other years.
-  tl2025:
-    <<: *paper
-    profiles: [tl2025]
-    image: paper-latex:tl2025
-    container_name: paper-latex-tl2025
-    build:
-      context: image
-      args:
-        SCHEME: "${TEXLIVE_SCHEME:-scheme-full}"
-        CTAN: https://ftp.math.utah.edu/pub/tex/historic/systems/texlive/2025/tlnet-final
-    volumes:
-      - "${PAPER_ROOT}:${PAPER_ROOT}"
-      - cache-tl2025:/cache          # separate: caches are not compatible across TeX Live years
+      - cache:/cache
 
 volumes:
   cache:
-  cache-tl2025:

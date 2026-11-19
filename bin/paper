@@ -1,43 +1,89 @@
 #!/bin/sh
 # ---------------------------------------------------------------------------
-# bin/paper: host-side entry point (runs on macOS, nothing to install).
-# 1. Service control:  bin/paper up | down | rebuild | new <name>
-# 2. Tool shim: symlinks in bin/ (paperbuild, tex-fmt, chktex, texcount, latexdiff, tectonic)
-#    point here; the tool runs inside the always-on container, in the same folder,
-#    via docker exec. The container is started automatically if it is not running.
-# A paper's paper.env with TEXLIVE=2025 routes its builds to the frozen TeX Live 2025 container.
+# bin/paper: the only public host command. Manage the shared container, create
+# papers, and run build/authoring tools without installing TeX on the host.
 # ---------------------------------------------------------------------------
 set -eu
 root=$(cd "$(dirname "$0")/.." && pwd -P)
 dc() { PAPER_ROOT=$root docker compose --project-directory "$root" --env-file "$root/paper.env" "$@"; }
-command -v docker >/dev/null 2>&1 || { echo "paper: docker not found. Start OrbStack first." >&2; exit 2; }
+command -v docker >/dev/null 2>&1 || { echo "paper: Docker not found. Start OrbStack first." >&2; exit 2; }
 
-tool=$(basename "$0")
-if [ "$tool" = paper ]; then
-  case "${1:-}" in
-    up)      dc up -d ;;
-    down)    dc down ;;
-    rebuild) dc build --pull && dc up -d --force-recreate ;;
-    new)     [ -n "${2:-}" ] && [ ! -e "$root/papers/$2" ] || { echo "usage: bin/paper new <name> (must not exist yet)" >&2; exit 2; }
-             mkdir -p "$root/papers" && cp -R "$root/templates/article" "$root/papers/$2" && echo "Created papers/$2" ;;
-    *)       echo "usage: bin/paper up|down|rebuild|new <name>" >&2; exit 2 ;;
-  esac
-  exit
-fi
+usage() {
+  cat <<'EOF'
+Usage: bin/paper <command> [arguments]
+  new <name> [--template <name>]  Create a paper (default template: article)
+  build [--journal] <file.tex>    Build a normal or clean submission PDF
+  fmt <file.tex>                  Format LaTeX source
+  check <file.tex>                Lint LaTeX source
+  count <file.tex>                Count words
+  diff <old.tex> <new.tex>        Show source differences
+  tectonic [arguments]            Run Tectonic directly
+  up | down                       Start or stop the shared container
+  rebuild                         Rebuild the selected TeX Live image
+  doctor                          Validate the container and installed tools
+EOF
+}
 
-# Only the project folder is mounted, so the tool must run inside it.
-here=$(pwd -P)
-case "$here/" in "$root"/*) ;; *) echo "paper: run inside $root (only that folder is visible to the compiler)" >&2; exit 2 ;; esac
+workdir() {
+  here=$(pwd -P)
+  case "$here/" in "$root"/*) ;; *) echo "paper: run inside $root" >&2; exit 2 ;; esac
+}
 
-# Paper folder = folder of the last existing file argument (else current folder); its paper.env may pin TEXLIVE.
-dir=$here; for a in "$@"; do [ -f "$a" ] && dir=$(cd "$(dirname "$a")" && pwd -P); done
-year=$(sed -n 's/^[[:space:]]*TEXLIVE[[:space:]]*=[[:space:]]*\([0-9]*\).*/\1/p' "$dir/paper.env" 2>/dev/null | tail -n1)
-name=paper-latex${year:+-tl$year}; svc=${year:+tl$year}
+run() {
+  workdir
+  # Fast path: one Docker call. Retry only when the container was not running.
+  # shortcut: a retry loses piped stdin; upgrade if formatter pipes become common.
+  docker exec -i -w "$here" paper-latex "$@" && return 0 || rc=$?
+  [ "$(docker container inspect -f '{{.State.Running}}' paper-latex 2>/dev/null)" = true ] && return "$rc"
+  echo "paper: starting the compile container..." >&2
+  dc up -d paper >&2
+  exec docker exec -i -w "$here" paper-latex "$@"
+}
 
-# Fast path: one docker call. Only on failure check whether the container was simply not running.
-# shortcut: if the container was down, the retry gets an empty stdin (only matters for piped tex-fmt).
-docker exec -i -w "$here" "$name" "$tool" "$@" && exit 0 || rc=$?
-[ "$(docker container inspect -f '{{.State.Running}}' "$name" 2>/dev/null)" = true ] && exit $rc
-echo "paper: starting the compile container..." >&2
-dc up -d ${svc:-paper} >&2
-exec docker exec -i -w "$here" "$name" "$tool" "$@"
+cmd=${1:-help}
+[ $# -eq 0 ] || shift
+case "$cmd" in
+  new)
+    name=${1:-}; template=article
+    if [ $# -eq 3 ] && [ "$2" = --template ]; then template=$3
+    elif [ $# -ne 1 ]; then usage >&2; exit 2; fi
+    case "$name" in ''|.|..|*[!A-Za-z0-9._-]*) echo "paper: invalid paper name" >&2; exit 2 ;; esac
+    case "$template" in ''|.|..|*[!A-Za-z0-9._-]*) echo "paper: invalid template name" >&2; exit 2 ;; esac
+    [ -d "$root/templates/$template" ] || { echo "paper: unknown template '$template'" >&2; exit 2; }
+    [ ! -e "$root/papers/$name" ] || { echo "paper: papers/$name already exists" >&2; exit 2; }
+    mkdir -p "$root/papers"
+    cp -R "$root/templates/$template" "$root/papers/$name"
+    echo "Created papers/$name from $template"
+    ;;
+  build) run paperbuild "$@" ;;
+  fmt) run tex-fmt "$@" ;;
+  check) run chktex "$@" ;;
+  count) run texcount "$@" ;;
+  diff) run latexdiff "$@" ;;
+  tectonic) run tectonic "$@" ;;
+  up) dc up -d paper ;;
+  down) dc down ;;
+  rebuild)
+    BUILD_ID=${BUILD_ID:-$(date -u +%Y%m%d%H%M%S)}
+    export BUILD_ID
+    dc build --pull --no-cache paper && dc up -d --force-recreate paper
+    ;;
+  doctor)
+    dc config -q
+    dc up -d paper
+    docker exec paper-latex sh -c '
+      for tool in paperbuild latexmk tectonic tex-fmt chktex texcount latexdiff texpresso texpresso-xetex; do
+        command -v "$tool" >/dev/null || { echo "missing: $tool" >&2; exit 1; }
+      done
+      texpresso -capabilities >/dev/null
+      echo "paper: OK (TeX Live $PAPER_TEXLIVE, image $PAPER_IMAGE_ID)"
+    '
+    ;;
+  _texpresso)
+    workdir
+    dc up -d paper >&2
+    exec docker exec -i -w "$here" paper-latex texpresso "$@"
+    ;;
+  help|-h|--help) usage ;;
+  *) usage >&2; exit 2 ;;
+esac
