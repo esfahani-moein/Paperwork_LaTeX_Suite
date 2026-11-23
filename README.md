@@ -27,6 +27,22 @@ paper --help
 - To reinstall the CLI, open the repository folder and run `uv tool install --reinstall --python '>=3.15.2' .`. Then check `paper --help` again.
 - If TeX reports a missing `.sty` file, check the `TeX:` error and log path printed by `paper build`. Include template files with your paper. For packages from TeX Live, add the package to the compiler image in `image/Dockerfile` and run `paper rebuild`. After a failed compile, the next build retries the compiler and keeps the last good PDF until a new build succeeds.
 
+## Remove image
+
+paper down
+docker image rm paper-latex:latest
+TEXLIVE=latest TEXLIVE_SCHEME=scheme-full paper rebuild
+paper doctor
+
+
+OR manually enter this:
+
+PAPER_ROOT="$PAPERSUITE_HOME" docker compose \
+  --project-directory "$PAPERSUITE_HOME" \
+  --env-file "$PAPERSUITE_HOME/paper.env" \
+  down --rmi all
+
+
 ## Build your first PDF
 
 Go to a folder where you keep your work, then create and build a paper.
