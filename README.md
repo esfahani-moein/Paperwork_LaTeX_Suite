@@ -25,6 +25,7 @@ paper --help
 - If `paper` is missing, run `uv tool update-shell`, open a new terminal, set `PAPERSUITE_HOME` again, and try `paper --help`. [uv tool installation guide](https://docs.astral.sh/uv/guides/tools/#installing-tools)
 - If builds fail to start, run `paper doctor`. Start Docker if the daemon is unavailable, run `paper up --build` if the image is missing, or run `paper up` if the compiler is stopped.
 - To reinstall the CLI, open the repository folder and run `uv tool install --reinstall --python '>=3.15.2' .`. Then check `paper --help` again.
+- If TeX reports a missing `.sty` file, check the `TeX:` error and log path printed by `paper build`. Include template files with your paper. For packages from TeX Live, add the package to the compiler image in `image/Dockerfile` and run `paper rebuild`. After a failed compile, the next build retries the compiler and keeps the last good PDF until a new build succeeds.
 
 ## Build your first PDF
 

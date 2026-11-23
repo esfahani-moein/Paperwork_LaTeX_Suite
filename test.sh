@@ -26,6 +26,8 @@ cd 'test paper'
 test -d .git
 git check-ignore -q .paper-cache/aux
 git check-ignore -q publication/main.pdf
+{ printf '%s\n' '\RequirePackage{nicefrac}' '\RequirePackage{placeins}'; cat main.tex; } >"$scratch/template.tex"
+cp "$scratch/template.tex" main.tex
 if "$paper" build </dev/null >"$scratch/not-ready" 2>&1; then
   echo 'Expected a noninteractive readiness error' >&2
   exit 1
@@ -63,5 +65,13 @@ if "$paper" build >"$scratch/bad-build" 2>&1; then
   exit 1
 fi
 cmp publication/main.pdf "$scratch/last-good.pdf"
+if "$paper" build >"$scratch/retry" 2>&1; then
+  echo 'Expected the unchanged invalid document to fail again' >&2
+  exit 1
+fi
+grep -q 'Running.*pdflatex' "$scratch/retry"
+grep -q '^TeX:.*Undefined control sequence' "$scratch/retry"
+cp "$scratch/source.tex" main.tex
+compile
 "$paper" doctor
 echo PASS

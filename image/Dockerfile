@@ -50,7 +50,7 @@ RUN set -eu; \
 ENV PATH=/opt/texpresso/bin:/usr/local/texlive/bin/current:$PATH
 
 # Smaller schemes still need the tools used by paper and the editor.
-RUN tlmgr install latexmk chktex latexdiff texcount \
+RUN tlmgr install latexmk chktex latexdiff texcount units placeins \
  && (luaotfload-tool -u || true)
 
 RUN arch=$(uname -m) \
