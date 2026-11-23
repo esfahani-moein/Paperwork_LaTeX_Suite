@@ -2,3 +2,13 @@
 # cont_refrence
 docs
 papers
+
+venv
+__pycache__
+
+.DS_Store
+.AppleDouble
+
+*.egg-info
+.ruff_cache
+.pytest_cache

@@ -1,0 +1,16 @@
+[project]
+name = "project-paperwork-latex-suit"
+version = "0.1.0"
+requires-python = ">=3.15.2"
+dependencies = []
+
+
+[tool.uv]
+python-preference = "only-managed"
+
+[dependency-groups]
+dev = [
+    "ruff>=0.17.6",
+    "ty>=0.0.108",
+]
+
