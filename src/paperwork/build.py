@@ -1,0 +1,185 @@
+"""Compile through the shared container and publish completed artifacts."""
+
+import fcntl
+import hashlib
+import os
+import re
+import shutil
+from collections.abc import Generator
+from contextlib import contextmanager, nullcontext
+from pathlib import Path
+from tempfile import NamedTemporaryFile, TemporaryDirectory
+
+import click
+
+from .docker import Docker
+from .project import Project
+from .staging import stage_project, sync_synctex
+
+_MODES = {"pdflatex": "-pdf", "lualatex": "-pdflua", "xelatex": "-pdfxe"}
+_PROGRAM = re.compile(
+    r"^%\s*!TEX\s*program\s*=\s*([a-z]+)", re.IGNORECASE | re.MULTILINE
+)
+_UNICODE_PACKAGE = re.compile(
+    r"\\usepackage\s*(?:\[[^\]]*\])?\s*\{[^}]*\b(?:fontspec|unicode-math)\b"
+)
+_DOCUMENT = re.compile(r"\\begin\s*\{document\}")
+
+
+def _engine(project: Project, journal: bool) -> str:
+    configured = (project.journal_engine if journal else None) or project.engine
+    if configured:
+        return configured
+    preamble = []
+    with project.source.open(errors="replace") as source:
+        for line in source:
+            directive = _PROGRAM.match(line)
+            if directive:
+                return directive[1].lower()
+            code = line.partition("%")[0]
+            preamble.append(code)
+            if _DOCUMENT.search(code):
+                break
+    return project.default_engine or (
+        "lualatex" if _UNICODE_PACKAGE.search("".join(preamble)) else "pdflatex"
+    )
+
+
+@contextmanager
+def project_lock(cache: Path) -> Generator[None]:
+    """Serialize builds and source writeback for a project on this host."""
+    cache.mkdir(parents=True, exist_ok=True)
+    with (cache / "lock").open("a") as lock:
+        fcntl.flock(lock, fcntl.LOCK_EX)
+        yield
+
+
+def publish_file(source: Path, dest: Path) -> None:
+    """Replace the destination only after the complete file is on its filesystem."""
+    if dest.is_file() and not dest.is_symlink():
+        previous, current = dest.stat(), source.stat()
+        if (previous.st_mtime_ns, previous.st_size) == (
+            current.st_mtime_ns,
+            current.st_size,
+        ):
+            return
+    with NamedTemporaryFile(dir=dest.parent, delete=False) as output:
+        staged = Path(output.name)
+    try:
+        shutil.copy2(source, staged)
+        os.replace(staged, dest)
+    finally:
+        staged.unlink(missing_ok=True)
+
+
+def _command(
+    engine: str, source: str, scratch: Path, *, shell_escape: bool, offline: bool
+) -> list[str]:
+    if engine == "tectonic":
+        command = ["tectonic", "--synctex", "--keep-logs", "--outdir", str(scratch)]
+        if offline:
+            command.append("-C")
+        if shell_escape:
+            command.extend(("-Z", "shell-escape"))
+    else:
+        command = [
+            "latexmk",
+            _MODES[engine],
+            f"-outdir={scratch}",
+            "-interaction=nonstopmode",
+            "-halt-on-error",
+            "-file-line-error",
+            "-synctex=1",
+        ]
+        if shell_escape:
+            command.append("-shell-escape")
+    return [*command, f"./{source}"]
+
+
+def build(docker: Docker, project: Project, outdir: Path, *, journal: bool) -> Path:
+    if outdir.is_relative_to(project.cache_dir):
+        raise click.ClickException("The output directory overlaps the project cache.")
+    engine = _engine(project, journal)
+    if engine not in (*_MODES, "tectonic"):
+        raise click.ClickException(
+            f"Unknown LaTeX engine {engine!r}. Set [build].engine in paper.toml."
+        )
+    if journal and engine == "tectonic":
+        raise click.ClickException(
+            "Set [journal].engine to a TeX Live engine for submission builds."
+        )
+
+    docker.ready()
+    if journal and project.journal_toolchain:
+        version = docker.run(("latex", "--version"), capture_output=True).stdout
+        release = re.search(r"TeX Live (\d{4})", version)
+        current = f"texlive-{release[1]}" if release else "unknown"
+        if project.journal_toolchain != current:
+            raise click.ClickException(
+                f"Journal needs {project.journal_toolchain}; the service provides {current}. "
+                "Select the required TeX Live image before building."
+            )
+
+    stem = project.source.stem
+    published_stem = f"journal_{stem}" if journal else stem
+    output = outdir / f"{published_stem}.pdf"
+    with project_lock(project.cache_dir):
+        excluded = [
+            project.cache_dir,
+            *(
+                folder / name
+                for folder in {outdir, project.outdir}
+                for name in (f"{stem}.pdf", f"journal_{stem}.pdf")
+            ),
+        ]
+        staged_root = stage_project(
+            project.root, suite_root=docker.root, excluded=excluded
+        )
+        relative_source = project.source.relative_to(project.root)
+        source_cwd = staged_root / relative_source.parent
+        cache = (
+            project.cache_dir
+            if staged_root == project.root
+            else staged_root.parent / "cache"
+        )
+        cache.mkdir(parents=True, exist_ok=True)
+        key = hashlib.sha256(
+            f"{docker.image_id}\0{engine}\0{project.shell_escape}\0{relative_source}".encode()
+        ).hexdigest()[:24]
+        job_dir = (
+            TemporaryDirectory(prefix="journal-", dir=cache)
+            if journal
+            else nullcontext(str(cache / key))
+        )
+        with job_dir as location:
+            scratch = Path(location)
+            scratch.mkdir(exist_ok=True)
+            docker.run(
+                _command(
+                    engine,
+                    project.source.name,
+                    scratch,
+                    shell_escape=project.shell_escape,
+                    offline=docker.network_mode == "none",
+                ),
+                cwd=source_cwd,
+            )
+            pdf = scratch / f"{stem}.pdf"
+            if not pdf.is_file() or not pdf.stat().st_size:
+                raise click.ClickException(
+                    f"Build produced no PDF for {project.source}."
+                )
+            outdir.mkdir(parents=True, exist_ok=True)
+            synctex = scratch / f"{stem}.synctex.gz"
+            if not synctex.is_file():
+                synctex = scratch / f"{stem}.synctex"
+            if synctex.is_file():
+                sync_synctex(
+                    synctex,
+                    output.with_suffix(".synctex.gz"),
+                    staged_root=staged_root,
+                    project_root=project.root,
+                    source_cwd=source_cwd,
+                )
+            publish_file(pdf, output)
+    return output

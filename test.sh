@@ -1,59 +1,67 @@
 #!/bin/sh
-# ---------------------------------------------------------------------------
-# End-to-end infrastructure check, using the same host CLI as authors and agents.
-# Usage: ./test.sh [scheme]     scheme-small reduces the verification download.
-# ---------------------------------------------------------------------------
+# Exercise the public CLI against a disposable deployment and paper.
 set -eu
-cd "$(dirname "$0")"; root=$(pwd -P)
-[ -n "${1:-}" ] && export TEXLIVE_SCHEME="$1"
-id=$$; a=_test_${id}_a; b=_test_${id}_b; c=_test_${id}_c
-logs=$(mktemp -d /tmp/paper-test.XXXXXX)
-trap 'rm -rf "$root/papers/$a" "$root/papers/$b" "$root/papers/$c" "$logs"' EXIT
-ok() { echo "ok   $*"; }
-fail() { echo "FAIL $*"; exit 1; }
+root=$(CDPATH='' cd "$(dirname "$0")" && pwd -P)
+paper=$root/bin/paper
+scratch=$(mktemp -d /tmp/paper-test.XXXXXX)
+scratch=$(cd "$scratch" && pwd -P)
+export COMPOSE_PROJECT_NAME=paper_test_$$ PAPER_CONTAINER_NAME=paper-test-$$
+export PAPERSUITE_HOME=$scratch/deploy
+export TEXLIVE_SCHEME=${1:-scheme-full}
+export PAPER_IMAGE=${PAPER_TEST_IMAGE:-paper-latex:smoke-$TEXLIVE_SCHEME}
+mkdir "$PAPERSUITE_HOME"
+cp "$root/compose.yaml" "$root/paper.env" "$PAPERSUITE_HOME/"
+cp -R "$root/image" "$PAPERSUITE_HOME/image"
 
-bin/paper rebuild >"$logs/image.log" 2>&1 || { tail -50 "$logs/image.log"; fail "image build"; }
-bin/paper new "$a" --template article >/dev/null
-bin/paper new "$b" >/dev/null
-bin/paper new "$c" >/dev/null
-echo ENGINE=xelatex > "papers/$b/paper.env"
-echo ENGINE=tectonic > "papers/$c/paper.env"
+cleanup() {
+  "$paper" down >/dev/null 2>&1 || true
+  docker volume rm "${COMPOSE_PROJECT_NAME}_cache" >/dev/null 2>&1 || true
+  rm -rf "$scratch"
+}
+trap cleanup EXIT
 
-# Normal and cached builds from the paper folder, with no auxiliary-file clutter.
-cd "papers/$a"; bin=../../bin
-$bin/paper build main.tex >"$logs/a.log" 2>&1 || { tail -20 "$logs/a.log"; fail "first build"; }
-sed -i '' 's/Start writing/Keep writing/' main.tex
-$bin/paper build main.tex >/dev/null 2>&1 || fail "cached rebuild"
-[ "$(ls | sort | tr '\n' ' ')" = "main.pdf main.synctex.gz main.tex paper.env " ] \
-  && ok "fast builds and clean paper folder" || fail "unexpected paper files"
-cd "$root"
+cd "$scratch"
+"$paper" new 'test paper'
+cd 'test paper'
+test -d .git
+git check-ignore -q .paper-cache/aux
+git check-ignore -q publication/main.pdf
+if "$paper" build </dev/null >"$scratch/not-ready" 2>&1; then
+  echo 'Expected a noninteractive readiness error' >&2
+  exit 1
+fi
+grep -q 'paper up' "$scratch/not-ready"
+if [ -n "${PAPER_TEST_IMAGE:-}" ]; then "$paper" up; else "$paper" up --build; fi
 
-# Different papers build in parallel with independent engine settings.
-bin/paper build "papers/$a/main.tex" >/dev/null 2>&1 & p1=$!
-bin/paper build "papers/$b/main.tex" >"$logs/b.log" 2>&1 & p2=$!
-bin/paper build "papers/$c/main.tex" >"$logs/c.log" 2>&1 & p3=$!
-wait $p1 || fail "parallel pdflatex"
-wait $p2 || { tail -20 "$logs/b.log"; fail "xelatex"; }
-wait $p3 || { tail -20 "$logs/c.log"; fail "tectonic"; }
-grep -q xelatex "$logs/b.log" && ok "parallel builds and engine overrides" || fail "xelatex not used"
-[ -s "papers/$c/main.pdf" ] || fail "tectonic pdf"
+compile() {
+  "$paper" build "$@" >"$scratch/compile.log" 2>&1 || { tail -n 40 "$scratch/compile.log" >&2; return 1; }
+}
 
-# Autosave and an agent targeting one paper are serialized by its build lock.
-bin/paper build "papers/$a/main.tex" >/dev/null 2>&1 & p1=$!
-bin/paper build "papers/$a/main.tex" >/dev/null 2>&1 || fail "concurrent same paper"
-wait $p1 && ok "per-document locking" || fail "concurrent same paper"
+compile
+compile
+grep -q 'Nothing to do' "$scratch/compile.log"
+compile --journal
+test -s publication/main.pdf
+test -s publication/journal_main.pdf
+gzip -dc publication/main.synctex.gz | grep -F "$(pwd -P)/main.tex" >/dev/null
+compile --outdir "$scratch/override"
+test -s "$scratch/override/main.pdf"
+mkdir sections
+cp main.tex sections/appendix.tex
+(cd sections && compile --outdir . appendix.tex && test -s appendix.pdf)
+cp paper.toml "$scratch/default.toml"
+printf '[build]\noutdir = "../comparison"\n' >paper.toml
+compile
+test -s "$scratch/comparison/main.pdf"
+cp "$scratch/default.toml" paper.toml
 
-bin/paper build --journal "papers/$a/main.tex" >/dev/null 2>&1 && ok "journal build" || fail "journal build"
-bin/paper fmt --help >/dev/null 2>&1 && ok "tool subcommands" || fail "fmt"
-bin/paper doctor >/dev/null && ok "doctor and TeXpresso capabilities" || fail "doctor"
-
-# Exercise the real TeXpresso-XeTeX engine against the container's TeX Live.
-docker exec -e SDL_VIDEODRIVER=dummy -w "$root/papers/$a" paper-latex \
-  texpresso -texlive -test-initialize main.tex >"$logs/texpresso.log" 2>&1 \
-  && ok "TeXpresso TeX Live initialization" || { tail -20 "$logs/texpresso.log"; fail "TeXpresso"; }
-
-# Isolation and path validation.
-docker exec paper-latex test ! -e "$HOME/.ssh" && ok "host home not visible" || fail "home visible"
-docker exec paper-latex touch /usr/x 2>/dev/null && fail "root fs writable" || ok "root fs read-only"
-(cd /tmp && "$root/bin/paper" build x.tex >/dev/null 2>&1) && fail "outside project allowed" || ok "path isolation"
+cp publication/main.pdf "$scratch/last-good.pdf"
+cp main.tex "$scratch/source.tex"
+{ printf '%s\n' '\thisCommandDoesNotExist'; cat "$scratch/source.tex"; } >main.tex
+if "$paper" build >"$scratch/bad-build" 2>&1; then
+  echo 'Expected an invalid TeX document to fail' >&2
+  exit 1
+fi
+cmp publication/main.pdf "$scratch/last-good.pdf"
+"$paper" doctor
 echo PASS

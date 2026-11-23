@@ -1,0 +1,4 @@
+/.paper-cache/
+/publication/
+*.pdf
+*.synctex.gz

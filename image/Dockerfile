@@ -1,6 +1,6 @@
 # ---------------------------------------------------------------------------
 # Author compilation image: selected TeX Live, standard engines, Tectonic,
-# TeXpresso, formatting/lint tools, and paperbuild. No editor runs here.
+# TeXpresso and formatting/lint tools. No editor runs here.
 # ---------------------------------------------------------------------------
 FROM debian:trixie-slim AS texpresso-runtime
 
@@ -26,7 +26,6 @@ FROM debian:trixie-slim
 
 ARG SCHEME=scheme-full
 ARG TEXLIVE=latest
-ARG BUILD_ID=dev
 ARG TEXFMT_VERSION=0.5.7
 ARG TECTONIC_VERSION=0.17.0
 
@@ -50,8 +49,8 @@ RUN set -eu; \
 
 ENV PATH=/opt/texpresso/bin:/usr/local/texlive/bin/current:$PATH
 
-# Smaller schemes still need the tools used by paperbuild and the editor.
-RUN tlmgr install latexmk mylatexformat chktex latexdiff texcount \
+# Smaller schemes still need the tools used by paper and the editor.
+RUN tlmgr install latexmk chktex latexdiff texcount \
  && (luaotfload-tool -u || true)
 
 RUN arch=$(uname -m) \
@@ -67,6 +66,7 @@ COPY --from=texpresso-runtime /opt/texpresso /opt/texpresso
 # Runtime is unprivileged and read-only; every writable cache is versioned.
 RUN useradd -m -u 1000 -s /bin/bash writer \
  && mkdir -p /cache /build && chown writer:writer /cache /build
+ARG BUILD_ID=dev
 ENV PAPER_TEXLIVE=$TEXLIVE \
     PAPER_IMAGE_ID=$BUILD_ID \
     TEXMFVAR=/cache/texmf-var-$TEXLIVE-$BUILD_ID \
@@ -80,5 +80,4 @@ RUN for c in article report; do for s in 10pt 11pt 12pt; do \
         '\title{T}\author{A}\begin{document}\maketitle\section{S}\textbf{B} \emph{E} $x^2$\end{document}' > /tmp/w.tex \
       && tectonic --outdir /tmp /tmp/w.tex || exit 1; done; done; rm -f /tmp/w.*
 
-COPY --chmod=755 paperbuild /usr/local/bin/paperbuild
 WORKDIR /tmp

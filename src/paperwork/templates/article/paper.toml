@@ -1,0 +1,9 @@
+[build]
+main = "main.tex"
+engine = "auto"
+outdir = "publication"
+
+# Set these if the journal requires a specific engine or toolchain.
+# [journal]
+# engine = "pdflatex"
+# toolchain = "texlive-2026"

@@ -48,6 +48,7 @@
   "latex-workshop.latex.autoBuild.run": "onSave",
   "latex-workshop.latex.autoClean.run": "never",
   "latex-workshop.view.pdf.viewer": "tab",
+  "latex-workshop.latex.outDir": "%DIR%/publication",
 
   "latex-workshop.latex.tools": [
     { "name": "fast", "command": "/bin/sh", "args": ["%WORKSPACE_FOLDER%/bin/paper", "build", "%DOC_EXT%"] },

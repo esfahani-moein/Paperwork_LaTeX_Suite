@@ -1,108 +1,61 @@
 # Paperwork LaTeX Suite
 
-A VS Code LaTeX workspace with one always-on Docker container. Authors do not install TeX Live,
-Tectonic, or TeXpresso on their computer.
+One Docker service compiles all LaTeX projects. CLI finds each project's settings, runs the compiler in Docker, and publishes the finished PDF to your filesystem.
 
-## Features
+## Set up
 
-- Fast build on save with pdfLaTeX, LuaLaTeX, or XeLaTeX.
-- Clean Journal builds for submission.
-- Optional Tectonic builds and TeXpresso live preview.
-- Independent papers and reusable templates.
-- Shared formatting, linting, word-count, and source-diff tools.
-- Non-root, read-only container with shell escape disabled by default.
-
-## Quickstart
-
-1. Install and start [OrbStack](https://orbstack.dev/) or Docker.
-2. Open this folder in VS Code and install the recommended extensions.
-3. Create and build a paper:
-
-   ```sh
-   bin/paper new my-paper
-   bin/paper build papers/my-paper/main.tex
-   ```
-
-4. Open `papers/my-paper/main.tex`, write, and save. LaTeX Workshop shows the PDF.
-
-The container starts automatically when a tool needs it. `bin/paper doctor` checks the setup.
-
-## Commands
-
-```text
-bin/paper new <name> [--template <name>]
-bin/paper build [--journal] <file.tex>
-bin/paper fmt <file.tex>
-bin/paper check <file.tex>
-bin/paper count <file.tex>
-bin/paper diff <old.tex> <new.tex>
-bin/paper tectonic [arguments]
-bin/paper up | down | rebuild | doctor
-```
-
-Use **Journal build** for the PDF you submit. It performs a clean full build without the cached
-preamble. Fast builds keep auxiliary files in RAM and cache the pdfLaTeX preamble.
-
-## Optional TeXpresso live preview
-
-Open a paper's root `main.tex` and run **TeXpresso: Start Document** from the VS Code command
-palette. The engine runs in `paper-latex`; only the extension and preview UI run on the host.
-
-TeXpresso uses a custom XeTeX engine. It is a preview, not proof that a pdfLaTeX, LuaLaTeX, or
-journal build is correct. Bibliography changes may require **TeXpresso: External Compile and
-Refresh** or a normal build.
-
-For continuous live editing, change `latex-workshop.latex.autoBuild.run` to `never` in workspace
-settings to avoid running a second full build after every autosave. Fast and Journal build buttons
-remain available.
-
-## Paper settings
-
-Edit `papers/<name>/paper.env`:
+Use a Docker runtime with Compose, Git, and uv. From the suite checkout, `uv sync --locked` sets up the development environment. The checkout command is `bin/paper`. To use `paper` from any directory, install the checkout with `uv tool install /path/to/suite` and set `PAPERSUITE_HOME` to that deployment checkout. The installed command runs directly from your PATH.
 
 ```sh
-ENGINE=auto       # auto | pdflatex | lualatex | xelatex | tectonic
-MAIN=main.tex
-SHELL_ESCAPE=0
+export PAPERSUITE_HOME=/path/to/suite
+cd ~/research
+paper new my-paper
+cd my-paper
+paper build
+paper build --journal
 ```
 
-`auto` selects LuaLaTeX when the main file loads `fontspec` or `unicode-math`, otherwise pdfLaTeX.
-Use an explicit engine for journal templates that require one. Tectonic uses its own package bundle;
-check it against journal requirements before submission.
+`paper new` creates `main.tex`, `paper.toml`, `.paper-cache/`, `publication/`, and a Git repository. Its `.gitignore` excludes generated PDFs, SyncTeX, and the cache. Add a Git ignore exception for source figures you track as PDFs.
 
-Keep the main file directly inside `papers/<name>/` when using the supplied TeXpresso configuration.
+## Build and publish
 
-## TeX Live version
+Run `paper build` from anywhere in the paper or pass a source file explicitly. The CLI looks for the nearest paper settings and runs the engine from the main file's directory to preserve relative LaTeX inputs. Existing `paper.env` settings are read during migration. Add `paper.toml` to set the new options.
 
-The project-wide `paper.env` selects the one distribution available in the container:
+```toml
+[build]
+main = "main.tex"
+engine = "auto"
+outdir = "publication"
 
-```sh
-TEXLIVE=latest    # current release when the image is built
-# TEXLIVE=2025    # frozen annual release
+# [journal]
+# engine = "pdflatex"
+# toolchain = "texlive-2025"
 ```
 
-Apply a change explicitly:
+- `main` is relative to the project root.
+- `engine` accepts `auto`, `pdflatex`, `lualatex`, `xelatex`, or `tectonic`. Automatic selection honors a source `% !TEX program` directive and uses LuaLaTeX for `fontspec` or `unicode-math`.
+- `outdir` accepts a project-relative path or an absolute path. For a one-off override, `paper build --outdir .` publishes in your current directory.
+- Journal builds use fresh scratch space and a TeX Live engine. An optional `toolchain` such as `texlive-2025` checks the running image version. Set a journal engine explicitly if the daily engine is Tectonic.
 
-```sh
-bin/paper rebuild
-```
+With the default settings, daily and journal builds write `publication/main.pdf` and `publication/journal_main.pdf`. SyncTeX is published next to the PDF. A failed compile keeps the last successful publication. Daily builds reuse `latexmk` state, so unchanged documents can skip TeX entirely.
 
-This rebuilds the image and replaces the container for **all papers**. `latest` does not update a
-running container by itself. The image includes TeXpresso 2.0.1 with its matched native engine;
-both AMD64 and ARM64 bundles are checksum-verified.
+## Shared compiler
 
-## Project layout
+Docker-backed commands check the container first. In a terminal, `paper` asks before building a missing image or starting a stopped service. Editors and CI receive an error with a startup command.
 
-```text
-bin/paper              public command-line interface
-bin/texpresso          internal VS Code-to-container bridge
-image/                 Docker image and internal paperbuild implementation
-papers/                independent author papers
-templates/             paper scaffolds
-compose.yaml           one shared paper-latex service
-paper.env              project-wide image and container settings
-.vscode/               editor integration
-test.sh                end-to-end infrastructure check
-```
+| Command | Purpose |
+| --- | --- |
+| `paper doctor` | Report the Docker daemon, configured image, container, and compiler versions. |
+| `paper up` / `paper up --build` | Start with the existing image, or build it first. |
+| `paper down` / `paper rebuild` | Stop the shared service, or refresh its image and recreate it. |
+| `paper fmt`, `check`, `count`, `diff`, `tectonic` | Run the bundled authoring tools. Pass tool options through the command. |
 
-Run `./test.sh scheme-small` for a smaller verification build, or `./test.sh` for the full image.
+`paper.env` in the deployment checkout selects the TeX Live distribution and container resources. `TEXLIVE=latest` uses the current release when the image builds. A historical year selects that year's frozen repository when available. Apply image changes with `paper rebuild`.
+
+Projects inside the deployment checkout use its existing bind mount. Other local projects are mirrored incrementally into `.paper-state/` in the deployment checkout, where their compiler caches also live. The CLI copies finished artifacts to the configured output directory. Use a dedicated directory for each paper and keep staged sources and their dependencies within that directory. The compiler is for trusted local inputs.
+
+## Editors
+
+For papers with `main.tex` in the project root, the supplied LaTeX Workshop recipes build to `publication/`. Set LaTeX Workshop's output directory to match the resolved `outdir` if you customize it or move `main.tex` into a subdirectory.
+
+TeXpresso live preview uses the existing `bin/texpresso` bridge for papers in the mounted checkout. For continuous TeXpresso preview, turn off LaTeX Workshop build-on-save to avoid duplicate work. Use a regular build to refresh bibliography output and a journal build before submission.

@@ -5,15 +5,20 @@
 # ---------------------------------------------------------------------------
 services:
   paper:
-    image: paper-latex:${TEXLIVE:-latest}
+    image: "${PAPER_IMAGE:-paper-latex:${TEXLIVE:-latest}}"
     build:
       context: image
       args:
         TEXLIVE: "${TEXLIVE:-latest}"
         SCHEME: "${TEXLIVE_SCHEME:-scheme-full}"
         BUILD_ID: "${BUILD_ID:-dev}"
-    container_name: paper-latex
+    container_name: "${PAPER_CONTAINER_NAME:-paper-latex}"
     command: sleep infinity
+    healthcheck:
+      test: [CMD-SHELL, "command -v latexmk >/dev/null && command -v pdflatex >/dev/null && test -w /build"]
+      interval: 5s
+      timeout: 2s
+      retries: 3
     init: true
     restart: unless-stopped
     read_only: true
