@@ -1,43 +1,67 @@
 # Paperwork LaTeX Suite
 
 One Docker service compiles all LaTeX projects. CLI finds each project's settings, runs the compiler in Docker, and publishes the finished PDF to your filesystem.
+Use `paper` to turn LaTeX files into PDFs. All your LaTeX papers share one Docker compiler, so you can edit your `.tex` files in any editor and build with CLI.
 
-## Set up
+## Install
 
-Use a Docker runtime with Compose, Git, and uv. From the suite checkout, `uv sync --locked` sets up the development environment. The checkout command is `bin/paper`. To use `paper` from any directory, install the checkout with `uv tool install /path/to/suite` and set `PAPERSUITE_HOME` to that deployment checkout. The installed command runs directly from your PATH.
+Install Git, uv, and a Docker runtime with Compose, then start Docker. [Git downloads](https://git-scm.com/downloads) · [uv installation](https://docs.astral.sh/uv/getting-started/installation/) · [Docker installation](https://docs.docker.com/get-started/get-docker/)
+
+Open a terminal and run these commands. If you already have the repository, open its folder and start with `uv tool install`.
 
 ```sh
-export PAPERSUITE_HOME=/path/to/suite
-cd ~/research
+cd "$HOME"
+git clone https://github.com/esfahani-moein/Paperwork_LaTeX_Suite.git
+cd Paperwork_LaTeX_Suite
+uv tool install --python '>=3.15.2' .
+export PAPERSUITE_HOME="$(pwd -P)"
+paper --help
+```
+
+`PAPERSUITE_HOME` tells `paper` where to find the compiler setup. To keep it set in new terminals, add `export PAPERSUITE_HOME="$HOME/Paperwork_LaTeX_Suite"` to your shell startup file, such as `~/.zshrc` on macOS or `~/.bashrc` on Linux. Use your own checkout path if it differs.
+
+### Check or reinstall
+
+- If `paper` is missing, run `uv tool update-shell`, open a new terminal, set `PAPERSUITE_HOME` again, and try `paper --help`. [uv tool installation guide](https://docs.astral.sh/uv/guides/tools/#installing-tools)
+- If builds fail to start, run `paper doctor`. Start Docker if the daemon is unavailable, run `paper up --build` if the image is missing, or run `paper up` if the compiler is stopped.
+- To reinstall the CLI, open the repository folder and run `uv tool install --reinstall --python '>=3.15.2' .`. Then check `paper --help` again.
+
+## Build your first PDF
+
+Go to a folder where you keep your work, then create and build a paper.
+
+```sh
 paper new my-paper
 cd my-paper
 paper build
-paper build --journal
 ```
 
-`paper new` creates `main.tex`, `paper.toml`, `.paper-cache/`, `publication/`, and a Git repository. Its `.gitignore` excludes generated PDFs, SyncTeX, and the cache. Add a Git ignore exception for source figures you track as PDFs.
+On the first build, `paper` may ask to build the compiler image or start the service. Open `publication/main.pdf` when the build finishes. Edit `main.tex` and run `paper build` again to update it.
 
-## Build and publish
+`paper new` also creates a Git repository. Its `.gitignore` excludes PDFs, SyncTeX files, and the build cache. Add an exception for any PDF figures you want to track in Git.
 
-Run `paper build` from anywhere in the paper or pass a source file explicitly. The CLI looks for the nearest paper settings and runs the engine from the main file's directory to preserve relative LaTeX inputs. Existing `paper.env` settings are read during migration. Add `paper.toml` to set the new options.
+## Paper settings
+
+Edit `paper.toml` in your paper folder. A new paper starts with these settings.
 
 ```toml
 [build]
 main = "main.tex"
 engine = "auto"
 outdir = "publication"
-
-# [journal]
-# engine = "pdflatex"
-# toolchain = "texlive-2025"
 ```
 
-- `main` is relative to the project root.
-- `engine` accepts `auto`, `pdflatex`, `lualatex`, `xelatex`, or `tectonic`. Automatic selection honors a source `% !TEX program` directive and uses LuaLaTeX for `fontspec` or `unicode-math`.
-- `outdir` accepts a project-relative path or an absolute path. For a one-off override, `paper build --outdir .` publishes in your current directory.
-- Journal builds use fresh scratch space and a TeX Live engine. An optional `toolchain` such as `texlive-2025` checks the running image version. Set a journal engine explicitly if the daily engine is Tectonic.
+- `main` is the `.tex` file to build. Its path is relative to the paper folder.
+- `engine = "auto"` uses **pdfLaTeX** with the standard suite settings. Set `lualatex`, `xelatex`, or `tectonic` explicitly when your template requires a different engine. If your source has a `% !TEX program` comment, set that engine in `paper.toml` to use it with `paper`.
+- `outdir` is where PDFs go. Use a path relative to the paper folder or an absolute path. For a one-time override, run `paper build --outdir .` to save to the current directory.
 
-With the default settings, daily and journal builds write `publication/main.pdf` and `publication/journal_main.pdf`. SyncTeX is published next to the PDF. A failed compile keeps the last successful publication. Daily builds reuse `latexmk` state, so unchanged documents can skip TeX entirely.
+Run `paper build` from anywhere inside the paper folder, or pass a source file such as `paper build chapters/appendix.tex`. Existing papers can still use their `paper.env` settings.
+
+## Check a submission
+
+Run `paper build --journal` for a clean build. Open `publication/journal_main.pdf` with the default settings. A failed build keeps your last successful PDF.
+
+Paperwork defaults to pdfLaTeX for arXiv papers. Check arXiv’s submission instructions and preview after uploading your source. If a venue requires a specific engine, set it under `[journal]` in `paper.toml`. You can also set `toolchain = "texlive-2025"` there to check the running image version. For a daily Tectonic build, choose a TeX Live engine for the journal build. [arXiv TeX submission guide](https://info.arxiv.org/help/submit_tex.html)
 
 ## Shared compiler
 

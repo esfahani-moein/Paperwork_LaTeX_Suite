@@ -1,5 +1,6 @@
 [build]
 main = "main.tex"
+# auto uses pdfLaTeX with the default suite settings.
 engine = "auto"
 outdir = "publication"
 

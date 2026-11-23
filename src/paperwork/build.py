@@ -17,31 +17,14 @@ from .project import Project
 from .staging import stage_project, sync_synctex
 
 _MODES = {"pdflatex": "-pdf", "lualatex": "-pdflua", "xelatex": "-pdfxe"}
-_PROGRAM = re.compile(
-    r"^%\s*!TEX\s*program\s*=\s*([a-z]+)", re.IGNORECASE | re.MULTILINE
-)
-_UNICODE_PACKAGE = re.compile(
-    r"\\usepackage\s*(?:\[[^\]]*\])?\s*\{[^}]*\b(?:fontspec|unicode-math)\b"
-)
-_DOCUMENT = re.compile(r"\\begin\s*\{document\}")
 
 
 def _engine(project: Project, journal: bool) -> str:
-    configured = (project.journal_engine if journal else None) or project.engine
-    if configured:
-        return configured
-    preamble = []
-    with project.source.open(errors="replace") as source:
-        for line in source:
-            directive = _PROGRAM.match(line)
-            if directive:
-                return directive[1].lower()
-            code = line.partition("%")[0]
-            preamble.append(code)
-            if _DOCUMENT.search(code):
-                break
-    return project.default_engine or (
-        "lualatex" if _UNICODE_PACKAGE.search("".join(preamble)) else "pdflatex"
+    return (
+        (project.journal_engine if journal else None)
+        or project.engine
+        or project.default_engine
+        or "pdflatex"
     )
 
 
